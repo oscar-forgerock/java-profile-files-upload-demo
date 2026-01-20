@@ -68,6 +68,9 @@ func Start() {
 	<-shutdownChan
 	logger.Log.Info("Shutdown signal received, stopping all JFR recordings...")
 
+	// Copy GC logs before shutdown
+	copyGCLogsOnShutdown()
+
 	// Stop all running JFR recordings before shutting down
 	stopAllJFRRecordings()
 

@@ -57,13 +57,16 @@ spec:
             - name: JAVA_OPTS
                # modify the value below to change JFR settings to experiment with
 #              value: "-XX:StartFlightRecording=duration=1h,filename=/tmp/jfr/recording.jfr" ,maxchunksize=1M,memorysize=1M,repository=/tmp
-              value: "-Xlog:jfr+startup=off -XX:NativeMemoryTracking=summary -XX:FlightRecorderOptions=stackdepth=128 -XX:StartFlightRecording:name=main-recording,duration=1m,maxage=1m,maxsize=2M,jdk.GCPhaseParallel#enabled=false,jdk.SocketRead#enabled=false,jdk.ThreadPark#enabled=false,dumponexit=true,filename=/tmp/jfr/main-recording-%t-%p.jfr"
-          command: ["sh", "-c", "java $JAVA_OPTS -jar /app.jar"]
+              #value: "-Xlog:gc:/opt/opendj/data/gc.log:time,uptime:filecount=5,filesize=50M"
+              value: "-Xlog:jfr+startup=off,gc:/opt/gc/gc.log:time,uptime:filecount=5,filesize=50M -XX:NativeMemoryTracking=summary -XX:FlightRecorderOptions=stackdepth=128 -XX:StartFlightRecording:name=main-recording,duration=1m,maxage=1m,maxsize=2M,jdk.GCPhaseParallel#enabled=false,jdk.SocketRead#enabled=false,jdk.ThreadPark#enabled=false,dumponexit=true,filename=/tmp/jfr/main-recording-%t-%p.jfr"
+          command: ["sh", "-c", "java $JAVA_OPTS -jar /opt/app/app.jar"]
           volumeMounts:
             - name: profile-storage
               mountPath: /tmp/jfr
               subPathExpr: $(POD_NAME)
-
+            - name: gc-logs
+              mountPath: /opt/gc
+              readOnly: false
         - name: go-sidecar
           image: profiler-sidecar:latest
           imagePullPolicy: Never
@@ -75,6 +78,9 @@ spec:
             - name: profile-storage
               mountPath: /tmp/jfr
               subPathExpr: $(POD_NAME)
+            - name: gc-logs
+              mountPath: /opt/gc
+              readOnly: true
           env:
             - name: POD_NAME
               valueFrom:
@@ -82,12 +88,11 @@ spec:
                   fieldPath: metadata.name
             - name: LOG_LEVEL
               value: "debug"
-          securityContext:
-            capabilities:
-              add:
-                - SYS_PTRACE
       volumes:
         - name: profile-storage
           hostPath:
             path: /tmp/jfr
             type: DirectoryOrCreate
+        - name: gc-logs
+          emptyDir:
+            sizeLimit: 500Mi

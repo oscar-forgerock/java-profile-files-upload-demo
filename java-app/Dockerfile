@@ -17,10 +17,11 @@ FROM openjdk:26-ea-17-jdk-trixie
 # set deployment directory
 WORKDIR /opt/app/
 
-COPY --from=build /opt/app/build/libs/spring-boot-docker-0.0.1-SNAPSHOT.jar /app.jar
+RUN mkdir -p /opt/gc && chown -R 111111:0 /opt/gc
 
 USER 111111
 
-RUN mkdir /tmp/jfr
+COPY --from=build /opt/app/build/libs/spring-boot-docker-0.0.1-SNAPSHOT.jar /opt/app/app.jar
+
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "/app.jar", "api"]
+ENTRYPOINT ["java", "-jar", "/opt/app/app.jar", "api"]
