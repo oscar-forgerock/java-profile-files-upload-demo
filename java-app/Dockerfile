@@ -19,6 +19,10 @@ WORKDIR /opt/app/
 
 RUN mkdir -p /opt/gc && chown -R 111111:0 /opt/gc
 
+# Copy preStop script
+COPY prestop.sh /opt/app/prestop.sh
+RUN chmod +x /opt/app/prestop.sh
+
 USER 111111
 
 COPY --from=build /opt/app/build/libs/spring-boot-docker-0.0.1-SNAPSHOT.jar /opt/app/app.jar

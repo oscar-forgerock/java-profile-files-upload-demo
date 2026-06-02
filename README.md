@@ -1,4 +1,7 @@
-# Java-Go Profiler Controller
+# Java Profiler with CLI Management
+
+> **Version 2.0 - Sidecarless Architecture**
+> This branch implements a simplified architecture without the Go sidecar container. JFR recordings are managed via an external CLI tool using `kubectl exec`.
 
 An automated JVM profiling and observability system that enables on-demand profiling of Java applications running in Kubernetes with automatic profile upload to Google Cloud Storage.
 
@@ -6,13 +9,23 @@ An automated JVM profiling and observability system that enables on-demand profi
 
 This system consists of three main components:
 
-1. **Java Application**: A minimal "Hello World" web service designed to be profiled
-2. **Go Sidecar**: REST API server that controls JFR (Java Flight Recorder) profiling
+1. **Java Application**: A minimal "Hello World" web service with JFR profiling capabilities
+2. **JFR CLI Tool**: External Go CLI tool that manages JFR recordings via `kubectl exec`
 3. **Go DaemonSet**: File scanner that automatically uploads profile files to GCS
+4. **PreStop Hook**: Shell script that stops JFR recordings and copies GC logs during pod termination
 
 ## 🏗 Architecture
 
 ```
+┌─────────────────────────────────────────────────────────────┐
+│ Developer Workstation                                       │
+│                                                             │
+│  ┌────────────┐                                             │
+│  │ JFR CLI    │──kubectl exec──┐                            │
+│  └────────────┘                │                            │
+└────────────────────────────────┼────────────────────────────┘
+                                 │
+                                 ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Kubernetes Node                                             │
 │                                                             │
@@ -20,19 +33,21 @@ This system consists of three main components:
 │  │ Java Pod         │         │ Go DaemonSet     │         │
 │  │                  │         │                  │         │
 │  │  ┌────────────┐  │         │  ┌────────────┐  │         │
-│  │  │ Java App   │  │         │  │ Scanner    │  │         │
-│  │  └────────────┘  │         │  └─────┬──────┘  │         │
-│  │  ┌────────────┐  │         │        │         │         │
-│  │  │ Go Sidecar │  │         │        ▼         │         │
-│  │  │ (API)      │  │         │  ┌────────────┐  │         │
-│  │  └────────────┘  │         │  │ GCS Upload │  │         │
-│  │        │         │         │  └────────────┘  │         │
-│  └────────┼─────────┘         └─────────────────┘         │
-│           │                                                 │
-│           ▼                                                 │
+│  │  │ Java App   │◄─┼─jcmd─   │  │ Scanner    │  │         │
+│  │  │  +JFR      │  │         │  └─────┬──────┘  │         │
+│  │  └──────┬─────┘  │         │        │         │         │
+│  │         │        │         │        ▼         │         │
+│  │  ┌──────▼─────┐  │         │  ┌────────────┐  │         │
+│  │  │PreStop Hook│  │         │  │ GCS Upload │  │         │
+│  │  │(Cleanup)   │  │         │  └────────────┘  │         │
+│  │  └──────┬─────┘  │         │                  │         │
+│  └─────────┼────────┘         └─────────────────┘         │
+│            │                                                │
+│            ▼                                                │
 │  ┌─────────────────────────────────────┐                   │
 │  │ HostPath: /tmp/jfr/{POD_NAME}/      │                   │
-│  │  - jfr_2026-01-10T08-30-15+11-00.jfr│◄──────────────────┤
+│  │  - jfr_*.jfr (profiles)             │                   │
+│  │  - gc_*.log* (GC logs)              │◄──────────────────┤
 │  └─────────────────────────────────────┘                   │
 └─────────────────────────────────────────────────────────────┘
                            │
@@ -45,11 +60,12 @@ This system consists of three main components:
 
 ### Data Flow
 
-1. **Trigger**: User calls `POST /create` on the Go Sidecar API
+1. **Trigger**: User runs `jfr-cli create` which executes `jcmd` in the pod via `kubectl exec`
 2. **Profile**: Java JVM generates JFR file in `/tmp/jfr/{POD_NAME}/`
-3. **Scan**: Go DaemonSet detects new `.jfr` file via fsnotify
-4. **Upload**: File is streamed to GCS at `gs://{BUCKET}/{POD_NAME}/{FILE}`
-5. **Cleanup**: Local file is deleted after successful upload
+3. **Scan**: Go DaemonSet detects new `.jfr` or `.log` files via fsnotify
+4. **Upload**: Files are streamed to GCS at `gs://{BUCKET}/{POD_NAME}/{FILE}`
+5. **Cleanup**: Local files are deleted after successful upload
+6. **PreStop**: When pod terminates, preStop hook stops active JFR recordings and copies GC logs
 
 ## 📂 Repository Structure
 
@@ -57,26 +73,30 @@ This system consists of three main components:
 .
 ├── java-app/                 # Java "Hello World" application
 │   ├── src/                  # Java source code
-│   ├── Dockerfile            # Multi-stage build (Maven → JRE)
+│   ├── prestop.sh            # PreStop hook script (JFR cleanup + GC log copy)
+│   ├── Dockerfile            # Multi-stage build (Gradle → JDK)
 │   └── build.gradle          # Gradle build configuration
 │
-├── go-sidecar/              # Go profiler controller
-│   ├── cmd/                 # Main entry point
+├── jfr-cli/                  # CLI tool for JFR management
+│   ├── main.go               # Go CLI application
+│   ├── Makefile              # Build commands
+│   └── README.md             # CLI documentation
+│
+├── go-sidecar/               # Go DaemonSet (file uploader)
+│   ├── cmd/                  # Main entry point
 │   ├── internal/
-│   │   ├── api/            # REST API server (sidecar mode)
-│   │   ├── daemon/         # File scanner (daemon mode)
-│   │   ├── jfr/            # JFR/jcmd interaction
-│   │   ├── logger/         # Structured logging (logrus)
-│   │   └── uploader/       # GCS upload client
-│   └── Dockerfile          # Multi-stage build (Go → Alpine)
+│   │   ├── daemon/           # File scanner
+│   │   ├── logger/           # Structured logging (logrus)
+│   │   └── uploader/         # GCS upload client
+│   └── Dockerfile            # Multi-stage build (Go → Alpine)
 │
-├── infra/                   # Kubernetes manifests
+├── infra/                    # Kubernetes manifests
 │   ├── java/
-│   │   └── statefulSet.yaml # Java app deployment
+│   │   └── statefulSet.yaml  # Java app deployment (no sidecar)
 │   └── go/
-│       └── daemonset.yaml   # Go daemon deployment
+│       └── daemonset.yaml    # Go daemon deployment
 │
-└── Makefile                 # Build and deployment commands
+└── Makefile                  # Build and deployment commands
 ```
 
 ## 🚀 Quick Start
